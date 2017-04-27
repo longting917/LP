@@ -1,1 +1,3 @@
 #This is the first file. 
+hospital <- read.csv("hospital database.csv", na.strings = "null")
+str(hospital)
