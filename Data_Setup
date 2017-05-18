@@ -1,4 +1,220 @@
-#This is the first file. 
+```{r}
+##load all the needed libraries
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(psych)
+library(caret)
+library(fiftystater)
+library(maps)
+```
+
+```{r}
+##import data
 hospital <- read.csv("hospital database.csv", na.strings = "null")
 str(hospital)
-#Great code
+
+##view variable names
+names(hospital)
+
+##eliminate variables that are very unlikely to be used
+hospital <- hospital[,-which(names(hospital) %in% c("address_line_1","address_line_2","County.Fips","FIPS","Web.Address","phone","latitude","longitude"))]
+
+##how many hospitals are we dealing with?
+length(unique(hospital$name))
+##there are 9120 hospitals in this dataset
+
+##clean up the state labels on the data
+unique(hospital$state)
+
+hospital[which(hospital$state == "CONNECTICUT"),]$state <- "CT"
+hospital[which(hospital$state == "MICHIGAN"),]$state <- "MI"
+hospital[which(hospital$state == "NEW YORK"),]$state <- "NY"
+hospital[which(hospital$state == "TEXAS"),]$state <- "TX"
+
+unique(hospital$state)
+
+##remove the unnesecary factor levels from the state variable
+hospital$state <- factor(hospital$state, levels = levels(hospital$state)[which(!levels(hospital$state) %in% c("CONNECTICUT","MICHIGAN","NEW YORK","TEXAS"))])
+
+levels(hospital$state)
+
+##how many of the rows have a state value of "", NA, or "Not Found"?
+nrow(hospital[which(hospital$state %in% c("", NA, "Not Found")),])
+##826 -> perhaps a small enough portion of data to eliminate if we feel the other variables from these rows are not going to be strong contributors to the analysis
+
+##the 3 variables of interest are: Actual Full Year Hospital Value Based Purchasing Adjustment Factor, Total Hospital Acquired Conditions (HAC) Score, and Full Year Readmission Payment Adjustment Factor
+
+hospital[which(hospital$state %in% c("", NA, "Not Found")),]$Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor
+hospital[which(hospital$state %in% c("", NA, "Not Found")),]$Total.Hospital.Acquired.Conditions..HAC..Score
+hospital[which(hospital$state %in% c("", NA, "Not Found")),]$Full.Year.Readmission.Payment.Adjustment.Factor
+
+##define a vector with the names of the hospitals
+hospNames <- unique(hospital$name)
+
+##remove the nameless rows (there are 14 only, so should have little to impact on the overall dataset)
+sum(is.na(hospital$name))
+hospital <- hospital[!is.na(hospital$name),]
+
+##discover which hospitals have all NA values for all years of the 3 key variables listed above
+varNA <- data.frame(name = hospNames)
+varNAfac <- NULL
+
+for(i in 1:length(hospNames)){
+  varNAfac[i] <- ifelse(all(is.na(hospital[hospital$name == hospNames[i],c("Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor","Total.Hospital.Acquired.Conditions..HAC..Score","Full.Year.Readmission.Payment.Adjustment.Factor")])),TRUE, FALSE)
+}
+
+sum(varNAfac == TRUE)
+##5671 hospitals have no data for any of the years in this set for the 3 variables listed above
+
+varNA$data <- varNAfac
+head(varNA[varNA$data == TRUE,], 10)
+
+##split the dataset into 2 datasets: 1 for hospitals that have at least 1 data point for the key variables and 1 that for hospitals that don't
+hospNoData <- hospital[which(hospital$name %in% varNA[varNA$data == TRUE,]$name),]
+hospData <- hospital[which(hospital$name %in% varNA[varNA$data == FALSE,]$name),]
+```
+
+```{r by Year}
+hospDataYear <- hospData %>% group_by(year_key) %>% summarise(HVBP = mean(Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor, na.rm = T), HAC = mean(Hospital.Acquired.Conditions..HAC..Payment.Reduction.Factor, na.rm = T), RPA = mean(Full.Year.Readmission.Payment.Adjustment.Factor, na.rm = T))
+
+hospDataYear
+
+##data trended out by year (overall of the penalty/reward for each program by year)
+ggplot(hospDataYear) + geom_line(aes(year_key, HVBP, color = "HVBP")) + geom_line(aes(year_key, HAC, color = "HAC")) + geom_line(aes(year_key, RPA, color = "RPA")) + scale_color_manual(name = "Program", values = c(HVBP = "red", HAC = "blue", RPA = "green")) + scale_x_continuous(name = "Year") + scale_y_continuous(name = "Program Adjustment Factor")
+##from an overall average view, the HVBP program looks to be trending up over the 3 years that it has been running
+
+##correlation between the 3 main hospital penalty measurements in 2015
+pairs.panels(hospData[which(hospData$year_key == "2015"),c("Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor","Hospital.Acquired.Conditions..HAC..Payment.Reduction.Factor","Full.Year.Readmission.Payment.Adjustment.Factor")])
+
+##correlation between the 3 main hospital penalty measurements in 2016
+pairs.panels(hospData[which(hospData$year_key == "2016"),c("Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor","Hospital.Acquired.Conditions..HAC..Payment.Reduction.Factor","Full.Year.Readmission.Payment.Adjustment.Factor")])
+##the HVBP and HAC factors seem to be the most correlated in both 2015 and 2016, but the correlation seems to be very weak
+###it seems like we wouldn't necesarily want a strong correlation between the different because that would mean that hospitals opted into all the programs would be double or triple reward/penalized for the same things. Each respective program should have its own criteria and adjustment factor scale in order to cover all the different elements of medical care to ensure that a hosptial doesn't just perform well in one element and overlook the others.
+```
+
+```{r by State}
+hospDataState <- hospData %>% group_by(state, year_key) %>% summarise(HVBP = mean(Actual.Full.Year.Hospital.Value.Based.Purchasing.Adjustment.Factor, na.rm = T), HAC = mean(Hospital.Acquired.Conditions..HAC..Payment.Reduction.Factor, na.rm = T), RPA = mean(Full.Year.Readmission.Payment.Adjustment.Factor, na.rm = T))
+
+hospDataState[which(hospDataState$year_key == "2016"),] %>% arrange(desc(HVBP))
+##from a prelimiary view of the data, using my limited knowledge, it appears that smaller states perform better on the HVBP program
+###I would speculate that this is due to a lower population and therefore lower demand, allowing greater attention and time to be spent with all patients (including those on Medicare/Medicaid), and therefore have higher ratings for the elements involved in the measuremnt of the HVBP factor
+
+##visualize the state data from above on a map
+states <- read.csv("states.csv")
+hospDataState <- merge(hospDataState, states, by = "state")
+
+head(hospDataState)
+
+##gradient mapping of the average adjustment factor for both 2015 and 2016
+###just like seen above, the smaller population states seem to have the most positive adjustment, but this is just a different way of looking at it
+ggplot(hospDataState[which(hospDataState$year_key == 2015),], aes(map_id = state_name)) + geom_map(aes(fill = HVBP), map = fifty_states) + expand_limits(x = fifty_states$long, y = fifty_states$lat) + coord_map() + scale_x_continuous(breaks = NULL) + scale_y_continuous(breaks = NULL) + labs(x = "", y = "") + theme(legend.position = "bottom", panel.background = element_blank())
+
+ggplot(hospDataState[which(hospDataState$year_key == 2016),], aes(map_id = state_name)) + geom_map(aes(fill = HVBP), map = fifty_states) + expand_limits(x = fifty_states$long, y = fifty_states$lat) + coord_map() + scale_x_continuous(breaks = NULL) + scale_y_continuous(breaks = NULL) + labs(x = "", y = "") + theme(legend.position = "bottom", panel.background = element_blank())
+
+##now we are going to look at the 3 metrics in parallel. We've looked at their general correlation, but now we want to see how states perform on all 3. If a state gets rewarded on HVBP, does it also get rewarded on HAC or RPA?
+hvbpState2016 <- hospDataState %>% filter(year_key == 2016) %>% select(state, HVBP, state_name) %>% arrange(desc(HVBP))
+hacState2016 <- hospDataState %>% filter(year_key == 2016) %>% select(state, HAC, state_name) %>% arrange(desc(HAC))
+rpaState2016 <- hospDataState %>% filter(year_key == 2016) %>% select(state, RPA, state_name) %>% arrange(desc(RPA))
+
+##rank each state according to its adjustment factor (with the most positive adjustment ranking highest)
+hvbpState2016$rank <- seq(1,52,1)
+hacState2016$rank <- seq(1,52,1)
+rpaState2016$rank <- seq(1,52,1)
+
+rank2016 <- merge(hvbpState2016, hacState2016, by = "state")
+head(rank2016)
+rank2016 <- merge(rank2016, rpaState2016, by = "state")
+head(rank2016)
+
+rank2016 <- rank2016[,-c(6,9)]
+names(rank2016)[which(names(rank2016) %in% c("state_name.x", "rank.x","rank.y","rank"))] <- c("state_name","HVBPrank","HACrank","RPArank")
+
+##take the overall average rank of each state across the 3 different programs
+rank2016$avgRank <- (rank2016$HVBPrank + rank2016$HACrank + rank2016$RPArank)/3
+rank2016 %>% arrange(avgRank)
+
+##graph this new state data out onto another map to visualize it slightly differently
+ggplot(rank2016, aes(map_id = state_name)) + geom_map(aes(fill = avgRank), map = fifty_states) + expand_limits(x = fifty_states$long, y = fifty_states$lat) + coord_map() + scale_x_continuous(breaks = NULL) + scale_y_continuous(breaks = NULL) + labs(x = "", y = "") + theme(legend.position = "bottom", panel.background = element_blank())
+
+##again, the standout poor performance states are Nevada and New York, while South Dakota, Hawaii, New Hampshire, and New Mexico ranked well across the board
+
+##now lets look into the movement of ranks by state from 2015 to 2016. Are hospitals and states making the needed changes to improve?
+hvbpState2015 <- hospDataState %>% filter(year_key == 2015) %>% select(state, HVBP, state_name) %>% arrange(desc(HVBP))
+hacState2015 <- hospDataState %>% filter(year_key == 2015) %>% select(state, HAC, state_name) %>% arrange(desc(HAC))
+rpaState2015 <- hospDataState %>% filter(year_key == 2015) %>% select(state, RPA, state_name) %>% arrange(desc(RPA))
+
+hvbpState2015$rank <- seq(1,52,1)
+hacState2015$rank <- seq(1,52,1)
+rpaState2015$rank <- seq(1,52,1)
+
+rank2015 <- merge(hvbpState2015, hacState2015, by = "state")
+head(rank2015)
+rank2015 <- merge(rank2015, rpaState2015, by = "state")
+
+head(rank2015)
+rank2015 <- rank2015[,-c(6,9)]
+names(rank2015)[which(names(rank2015) %in% c("state_name.x", "rank.x","rank.y","rank"))] <- c("state_name","HVBPrank","HACrank","RPArank")
+
+rank2015$avgRank <- (rank2015$HVBPrank + rank2015$HACrank + rank2015$RPArank)/3
+rank2015 %>% arrange(avgRank)
+
+##establish an overall rank for both 2015 and 2016 and measure the movement between the years
+rank2016 <- rank2016 %>% arrange(avgRank)
+rank2015 <- rank2015 %>% arrange(avgRank)
+
+rank2015$ovlRank <- seq(1,52,1)
+rank2016$ovlRank <- seq(1,52,1)
+
+rankChange <- rank2015 %>% select(state_name, ovlRank)
+rankChange <- merge(rankChange, rank2016[,c("state_name","ovlRank")], by = "state_name")
+
+names(rankChange)[2:3] <- c("ovlRank2015","ovlRank2016")
+
+##calculate the movement from 2015 to 2016 of each state
+rankChange$movement <- (rankChange$ovlRank2016 - rankChange$ovlRank2015) * -1
+rankChange %>% arrange(desc(movement))
+
+##how many states only moved up or down 5 or fewer spots in the overall rankings?
+nrow(rankChange[which(abs(rankChange$movement) < 5),])
+##31 states
+
+##map the movement on the US map and visualize what states moved the most and if there is any geographical connection
+ggplot(rankChange, aes(map_id = state_name)) + geom_map(aes(fill = movement), map = fifty_states) + expand_limits(x = fifty_states$long, y = fifty_states$lat) + coord_map() + scale_x_continuous(breaks = NULL) + scale_y_continuous(breaks = NULL) + labs(x = "", y = "") + theme(legend.position = "bottom", panel.background = element_blank())
+##looks like Utah, Vermont, and Alaska moved the farthest down and New Mexico and North Dakota moved the farthest up
+
+##let's add 2014 to this data
+hvbpState2014 <- hospDataState %>% filter(year_key == 2014) %>% select(state, HVBP, state_name) %>% arrange(desc(HVBP))
+hacState2014 <- hospDataState %>% filter(year_key == 2014) %>% select(state, HAC, state_name) %>% arrange(desc(HAC))
+rpaState2014 <- hospDataState %>% filter(year_key == 2014) %>% select(state, RPA, state_name) %>% arrange(desc(RPA))
+
+hvbpState2014$rank <- seq(1,52,1)
+hacState2014$rank <- seq(1,52,1)
+rpaState2014$rank <- seq(1,52,1)
+
+rank2014 <- merge(hvbpState2014, hacState2014, by = "state")
+head(rank2014)
+rank2014 <- merge(rank2014, rpaState2014, by = "state")
+
+head(rank2014)
+rank2014 <- rank2014[,-c(6,9)]
+names(rank2014)[which(names(rank2014) %in% c("state_name.x", "rank.x","rank.y","rank"))] <- c("state_name","HVBPrank","HACrank","RPArank")
+
+rank2014$avgRank <- (rank2014$HVBPrank + rank2014$HACrank + rank2014$RPArank)/3
+rank2014 <- rank2014 %>% arrange(avgRank)
+rank2014$ovlRank <- seq(1,52,1)
+
+rankChange <- merge(rankChange, rank2014[,c("state_name","ovlRank")], by = "state_name")
+names(rankChange)[5] <- "ovlRank2014"
+
+##include the ranking movement from 2014 to 2015
+rankChange$movement2015 <- (rankChange$ovlRank2015 - rankChange$ovlRank2014) * -1
+head(rankChange)
+
+##add the overall movement from 2014 to 2016
+rankChange$movementTotal <- (rankChange$ovlRank2016 - rankChange$ovlRank2014) * -1
+head(rankChange)
+
+ggplot(rankChange, aes(map_id = state_name)) + geom_map(aes(fill = movementTotal), map = fifty_states) + expand_limits(x = fifty_states$long, y = fifty_states$lat) + coord_map() + scale_x_continuous(breaks = NULL) + scale_y_continuous(breaks = NULL) + labs(x = "", y = "") + theme(legend.position = "bottom", panel.background = element_blank())
+##looks like there were some big moves from 2014 to 2016
